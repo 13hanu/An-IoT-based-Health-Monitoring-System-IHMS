@@ -1,0 +1,193 @@
+#include <Wire.h>
+#include <math.h>
+#include <SoftwareSerial.h>
+#include "MAX30100_PulseOximeter.h"
+#define RX 2
+#define TX 3
+#define REPORTING_PERIOD_MS     1000
+#define tempPin 8
+#define Buzzer 9
+
+//----------------*Variable definition of MAX30100-----------------
+
+PulseOximeter pox;
+uint32_t tsLastReport = 0;
+//---------------------------------------------------------------------------------
+
+//----------------*Variable defining/configuration of WiFi Module-----------------
+String AP = "TP-Link_2.4";       // WiFi NAME
+String PASS = "Bhanu_TPLink_2.4GHz"; // WiFi PASSWORD
+unsigned long Channel_ID = 1396973;
+String API = "EXW1G2EB0PS6M360";   // Write API KEY
+String HOST = "api.thingspeak.com";
+String PORT = "80";
+int countTrueCommand;
+int countTimeCommand; 
+boolean found = false; 
+int valSensor = 1;
+SoftwareSerial esp8266(RX,TX); 
+//---------------------------------------------------------------------------------
+int val; // Temp Sensor Variable
+
+//------------------*Main Code-------------------------
+void setup()
+{ 
+    pinMode(Buzzer, OUTPUT);
+    Serial.begin(115200);
+    PulseOximeterSetup();
+    esp8266.begin(115200);
+    sendCommand("AT",5,"OK");
+    sendCommand("AT+CWMODE=1",5,"OK");
+    sendCommand("AT+CWJAP=\""+ AP +"\",\""+ PASS +"\"",20,"OK");
+}
+
+void loop()
+{
+    
+    Temperature();
+    HeartRate();
+    OxygenLevel();
+   String getData = "GET /update?api_key="+ API +"&field1="+Temperature()+"&field2="+HeartRate()+"&field3="+OxygenLevel(); /* sends the data to ThingsSpeak */
+   sendCommand("AT+CIPMUX=1",5,"OK");
+   sendCommand("AT+CIPSTART=0,\"TCP\",\""+ HOST +"\","+ PORT,15,"OK");
+   sendCommand("AT+CIPSEND=0," +String(getData.length()+4),4,">");
+   esp8266.println(getData);delay(1500);countTrueCommand++;
+   sendCommand("AT+CIPCLOSE=0",5,"OK");
+
+  if ((Temperature()> 99)||((HeartRate()<60)||(HeartRate()>100))||(OxygenLevel()<60))
+  {
+    tone(Buzzer, 1000); // Send 1KHz sound signal...
+    delay(3000);
+    noTone(Buzzer);     // Stop sound...
+    delay(1000);
+  }
+  
+}
+
+//---------------------------------------------------------
+
+//------------*Body Temperature Measurement*---------------
+float Temperature()
+{
+  val = analogRead(tempPin);
+  float mv = ( val/1024.0)*5000;
+  float cel = mv/10;
+  float farh = (cel*9)/5 + 32;
+  Serial.print("TEMPRATURE = ");
+  Serial.print(farh);
+  Serial.print("*F");
+  Serial.println();
+  delay(1000);
+  return float(farh);
+}
+//---------------------------------------------------------
+
+
+//------------*Heart Beat Measurement*---------------------
+float HeartRate()
+{
+      // Make sure to call update as fast as possible
+    pox.update();
+
+    // Asynchronously dump heart rate and oxidation levels to the serial
+    // For both, a value of 0 means "invalid"
+    if (millis() - tsLastReport > REPORTING_PERIOD_MS) {
+        float HR = pox.getHeartRate();
+        Serial.print("Heart rate:");
+        Serial.print(HR);
+        tsLastReport = millis();
+        return float(HR);
+    }
+}
+//---------------------------------------------------------
+
+//------------*Oxygen Level Measurement*---------------------
+float OxygenLevel()
+{
+    // Make sure to call update as fast as possible
+    pox.update();
+
+    // Asynchronously dump heart rate and oxidation levels to the serial
+    // For both, a value of 0 means "invalid"
+    if (millis() - tsLastReport > REPORTING_PERIOD_MS) {
+        float SpO2 = pox.getSpO2();
+
+        Serial.print("bpm / SpO2:");
+        Serial.print(SpO2);
+        Serial.println("%");
+        tsLastReport = millis();
+        return float(SpO2);
+    }
+}
+//---------------------------------------------------------
+// Callback (registered below) fired when a pulse is detected
+void onBeatDetected()
+{
+    Serial.println("Beat!");
+}
+
+//------------*SetUp for PulseOximeter senors*---------------------
+void PulseOximeterSetup()
+{
+  
+    Serial.print("Initializing pulse oximeter..");
+
+    // Initialize the PulseOximeter instance
+    // Failures are generally due to an improper I2C wiring, missing power supply
+    // or wrong target chip
+    if (!pox.begin()) {
+        Serial.println("FAILED");
+        for(;;);
+    } else {
+        Serial.println("SUCCESS");
+    }
+
+    // The default current for the IR LED is 50mA and it could be changed
+    //   by uncommenting the following line. Check MAX30100_Registers.h for all the
+    //   available options.
+    // pox.setIRLedCurrent(MAX30100_LED_CURR_7_6MA);
+
+    // Register a callback for the beat detection
+    pox.setOnBeatDetectedCallback(onBeatDetected);
+  
+}
+//---------------------------------------------------------
+
+
+//------------*Send Command of ESP8266 WiFi Module*---------------------
+
+void sendCommand(String command, int maxTime, char readReplay[]) {
+  Serial.print(countTrueCommand);
+  Serial.print(". at command => ");
+  Serial.print(command);
+  Serial.print(" ");
+  while(countTimeCommand < (maxTime*1))
+  {
+    esp8266.println(command);//at+cipsend
+    if(esp8266.find(readReplay))//ok
+    {
+      found = true;
+      break;
+    }
+  
+    countTimeCommand++;
+  }
+  
+  if(found == true)
+  {
+    Serial.println("OYI");
+    countTrueCommand++;
+    countTimeCommand = 0;
+  }
+  
+  if(found == false)
+  {
+    Serial.println("Fail");
+    countTrueCommand = 0;
+    countTimeCommand = 0;
+  }
+  
+  found = false;
+ }
+
+//---------------------------------------------------------
